@@ -263,6 +263,24 @@ class NotifySlack(NotifyBase):
             'default': True,
             'map_to': 'include_footer',
         },
+        'add_reactions': {
+            'name': _('Add Reactions'),
+            'type': 'list',
+            'default': False,
+            'map_to': 'add_reactions',
+        },
+        'remove_existing_reactions': {
+            'name': _('Remove Existing Reactions'),
+            'type': 'bool',
+            'default': False,
+            'map_to': 'remove_existing_reactions',
+        },
+        'pin_message': {
+            'name': _('Pin Message'),
+            'type': 'bool',
+            'default': False,
+            'map_to': 'pin_message',
+        },
         # Use Payload in Blocks (vs legacy way):
         #  See: https://api.slack.com/reference/messaging/payload
         'blocks': {
@@ -282,7 +300,9 @@ class NotifySlack(NotifyBase):
 
     def __init__(self, access_token=None, token_a=None, token_b=None,
                  token_c=None, targets=None, include_image=True,
-                 include_footer=True, use_blocks=None, **kwargs):
+                 include_footer=True, add_reactions=[],
+                 remove_existing_reactions=False,
+                 pin_message=False, use_blocks=None, **kwargs):
         """
         Initialize Slack Object
         """
@@ -300,7 +320,7 @@ class NotifySlack(NotifyBase):
                 self.logger.warning(msg)
                 raise TypeError(msg)
 
-            self.token_b = validate_regex(
+            self.token_2b = validate_regex(
                 token_b, *self.template_tokens['token_b']['regex'])
             if not self.token_b:
                 msg = 'An invalid Slack (second) Token ' \
@@ -382,6 +402,15 @@ class NotifySlack(NotifyBase):
 
         # Place a footer with each post
         self.include_footer = include_footer
+
+        # Do we add reaction emojis after message post
+        self.add_reactions = add_reactions
+
+        # Do we pin message after message post
+        self.pin_message = pin_message
+
+        # Remove existing reactions
+        self.remove_existing_reactions = remove_existing_reactions
         return
 
     def send(self, body, title='', notify_type=NotifyType.INFO, attach=None,
@@ -650,6 +679,33 @@ class NotifySlack(NotifyBase):
                     # We failed to post our attachments, take an early exit
                     return False
 
+        # Here is where we will handle post message modification(s)
+        channel_id = response['channel']
+        if self.remove_existing_reactions and thread_ts:
+            # We will remove existing reactions
+            url = self.api_url.format('reactions.get')
+            params = {
+                'channel': channel_id,
+                'timestamp': thread_ts
+            }
+            response = self._get(url, params)
+            self.logger.debug('Response Details:\r\n{}'.format(response))
+            if not response:
+                has_error = True
+                self.logger.error(
+                    'Could not get reactions from message {}.'.format(
+                        url))
+            else:
+                for reaction in response['message']['reactions']:
+                    if not self.remove_existing_reaction_from_slack(channel_id,
+                                                                    thread_ts,
+                                                                    reaction
+                                                                    ['name']):
+                        has_error = True
+                        self.logger.error(
+                            'Could not remove reaction {}'
+                            .format(
+                                reaction['name']))
         return not has_error
 
     def lookup_userid(self, email):
@@ -807,6 +863,29 @@ class NotifySlack(NotifyBase):
             return None
 
         return user_id
+
+    def _get(self, url, params={}):
+        headers = {
+            'User-Agent': self.app_id,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': 'Bearer {}'.format(self.access_token),
+        }
+        try:
+            r = requests.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    verify=self.verify_certificate,
+                    timeout=self.request_timeout,
+                )
+        except (AttributeError, TypeError, ValueError):
+                # ValueError = r.content is Unparsable
+                # TypeError = r.content is None
+                # AttributeError = r is None
+                pass
+        else:
+            response = loads(r.content)
+        return response
 
     def _send(self, url, payload, attach=None, **kwargs):
         """
@@ -1036,6 +1115,22 @@ class NotifySlack(NotifyBase):
         """
         return len(self.channels)
 
+    def remove_existing_reaction_from_slack(self, channel, timestamp, reaction):
+        self.logger.info('Sending remove reaction:\r\n{}'.format(reaction))
+        url = self.api_url.format('reactions.remove')
+        payload = {
+            'channel': channel,
+            'timestamp': timestamp,
+            'name': reaction
+        }
+        return self._send(url, payload=payload)
+
+    def add_reactions(self, channel, thread, reactions):
+        pass
+
+    def pin_message(self, channel, thread):
+        pass
+        
     @staticmethod
     def parse_url(url):
         """
@@ -1110,6 +1205,10 @@ class NotifySlack(NotifyBase):
         # Get Footer Flag
         results['include_footer'] = \
             parse_bool(results['qsd'].get('footer', True))
+
+        # Get Remove Reaction Flag
+        results['remove_existing_reactions'] = \
+            parse_bool(results['qsd'].get('remove_existing_reactions', False))
 
         return results
 
