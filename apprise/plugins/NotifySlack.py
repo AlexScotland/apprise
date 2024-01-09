@@ -276,11 +276,11 @@ class NotifySlack(NotifyBase):
             'default': False,
             'map_to': 'remove_existing_reactions',
         },
-        'pin_message': {
+        'pin': {
             'name': _('Pin Message'),
             'type': 'bool',
             'default': False,
-            'map_to': 'pin_message',
+            'map_to': 'pinned_message',
         },
         # Use Payload in Blocks (vs legacy way):
         #  See: https://api.slack.com/reference/messaging/payload
@@ -303,7 +303,7 @@ class NotifySlack(NotifyBase):
                  token_c=None, targets=None, include_image=True,
                  include_footer=True, add_reactions=[],
                  remove_existing_reactions=False,
-                 pin_message=False, use_blocks=None, **kwargs):
+                 pinned_message=False, use_blocks=None, **kwargs):
         """
         Initialize Slack Object
         """
@@ -408,7 +408,7 @@ class NotifySlack(NotifyBase):
         self.add_reactions = add_reactions
 
         # Do we pin message after message post
-        self.pin_message = pin_message
+        self.pin_message = pinned_message
 
         # Remove existing reactions
         self.remove_existing_reactions = remove_existing_reactions
@@ -711,16 +711,15 @@ class NotifySlack(NotifyBase):
                                 'Could not remove reaction {}'
                                 .format(
                                     reaction['name']))
-
+        if not thread_ts:
+            # If Thread TS is not given,
+            # lets use the id of the message we just posted
+            self.logger.debug('thread_ts not present, replacing with last \
+                                messages ts {}'.format(response['ts']))
+            thread_ts = response['ts']
         # Add reactions to message
         if self.add_reactions:
             self.logger.debug('Starting Reaction adding')
-            # If Thread TS is not given,
-            # lets use the id of the message we just posted
-            if not thread_ts:
-                self.logger.debug('thread_ts not present, replacing with last \
-                                  messages ts {}'.format(response['ts']))
-                thread_ts = response['ts']
             for reaction in self.add_reactions:
                 self.logger.debug('Adding Reaction {}'.format(reaction))
                 if not self.add_reaction_to_slack(channel_id,
@@ -731,6 +730,15 @@ class NotifySlack(NotifyBase):
                         'Could not add reaction {}'
                         .format(
                             reaction))
+
+        # Pin the message
+        # We will attempt to Pin/unpin the message
+        # and ignore any "already pinned errors"
+        self.toggle_pin_message_on_slack(
+            channel_id,
+            thread_ts,
+            self.pin_message
+        )
         return not has_error
 
     def lookup_userid(self, email):
@@ -1161,9 +1169,18 @@ class NotifySlack(NotifyBase):
         }
         return self._send(url, payload=payload)
 
-    def pin_message(self, channel, thread):
-        pass
-        
+    def toggle_pin_message_on_slack(self, channel, timestamp, pinned=False):
+        self.logger.info('Toggling Pin for message at timestamp\
+            :\r\n{}'.format(timestamp))
+        url = self.api_url.format('pins.add') if pinned \
+            else self.api_url.format('pins.remove')
+        print(url)
+        payload = {
+            'channel': channel,
+            'timestamp': timestamp,
+        }
+        return self._send(url, payload=payload)
+
     @staticmethod
     def parse_url(url):
         """
@@ -1244,6 +1261,10 @@ class NotifySlack(NotifyBase):
         # Get Reactions to add
         results['add_reactions'] = \
             ast.literal_eval(results['qsd'].get('add_reactions', '[]'))
+        # Get Pin message Flag
+        results['pinned_message'] = \
+            parse_bool(results['qsd'].get('pin', False))
+        print(results)
         return results
 
     @staticmethod
