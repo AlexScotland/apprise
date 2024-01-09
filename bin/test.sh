@@ -62,7 +62,7 @@ fi
 
 pushd $PYTHONPATH &>/dev/null
 if [ ! -z "$@" ]; then
-   LANG=C.UTF-8 PYTHONPATH=$PYTHONPATH $PYTEST -k "$@"
+   LANG=C.UTF-8 PYTHONPATH=$PYTHONPATH $PYTEST -s -k "$@"
    exit $?
 
 else
