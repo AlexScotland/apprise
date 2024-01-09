@@ -77,6 +77,7 @@ import requests
 from json import dumps
 from json import loads
 from time import time
+import ast
 
 from .NotifyBase import NotifyBase
 from ..common import NotifyImageSize
@@ -689,23 +690,47 @@ class NotifySlack(NotifyBase):
                 'timestamp': thread_ts
             }
             response = self._get(url, params)
-            self.logger.debug('Response Details:\r\n{}'.format(response))
+            self.logger.debug('Received reaction  \
+                response:\r\n{}'.format(response))
             if not response:
                 has_error = True
                 self.logger.error(
                     'Could not get reactions from message {}.'.format(
                         url))
             else:
-                for reaction in response['message']['reactions']:
-                    if not self.remove_existing_reaction_from_slack(channel_id,
-                                                                    thread_ts,
-                                                                    reaction
-                                                                    ['name']):
-                        has_error = True
-                        self.logger.error(
-                            'Could not remove reaction {}'
-                            .format(
-                                reaction['name']))
+                if response['message'].get("reactions"):
+                    for reaction in response['message']['reactions']:
+                        if not \
+                            self.remove_existing_reaction_from_slack(
+                                channel_id,
+                                thread_ts,
+                                reaction
+                                ['name']):
+                            has_error = True
+                            self.logger.error(
+                                'Could not remove reaction {}'
+                                .format(
+                                    reaction['name']))
+
+        # Add reactions to message
+        if self.add_reactions:
+            self.logger.debug('Starting Reaction adding')
+            # If Thread TS is not given,
+            # lets use the id of the message we just posted
+            if not thread_ts:
+                self.logger.debug('thread_ts not present, replacing with last \
+                                  messages ts {}'.format(response['ts']))
+                thread_ts = response['ts']
+            for reaction in self.add_reactions:
+                self.logger.debug('Adding Reaction {}'.format(reaction))
+                if not self.add_reaction_to_slack(channel_id,
+                                                  thread_ts,
+                                                  reaction):
+                    has_error = True
+                    self.logger.error(
+                        'Could not add reaction {}'
+                        .format(
+                            reaction))
         return not has_error
 
     def lookup_userid(self, email):
@@ -1115,7 +1140,8 @@ class NotifySlack(NotifyBase):
         """
         return len(self.channels)
 
-    def remove_existing_reaction_from_slack(self, channel, timestamp, reaction):
+    def remove_existing_reaction_from_slack(self, channel,
+                                            timestamp, reaction):
         self.logger.info('Sending remove reaction:\r\n{}'.format(reaction))
         url = self.api_url.format('reactions.remove')
         payload = {
@@ -1125,8 +1151,15 @@ class NotifySlack(NotifyBase):
         }
         return self._send(url, payload=payload)
 
-    def add_reactions(self, channel, thread, reactions):
-        pass
+    def add_reaction_to_slack(self, channel, timestamp, reaction):
+        self.logger.info('Sending remove reaction:\r\n{}'.format(reaction))
+        url = self.api_url.format('reactions.add')
+        payload = {
+            'channel': channel,
+            'timestamp': timestamp,
+            'name': reaction
+        }
+        return self._send(url, payload=payload)
 
     def pin_message(self, channel, thread):
         pass
@@ -1205,11 +1238,12 @@ class NotifySlack(NotifyBase):
         # Get Footer Flag
         results['include_footer'] = \
             parse_bool(results['qsd'].get('footer', True))
-
         # Get Remove Reaction Flag
         results['remove_existing_reactions'] = \
             parse_bool(results['qsd'].get('remove_existing_reactions', False))
-
+        # Get Reactions to add
+        results['add_reactions'] = \
+            ast.literal_eval(results['qsd'].get('add_reactions', '[]'))
         return results
 
     @staticmethod
