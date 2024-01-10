@@ -77,6 +77,7 @@ import requests
 from json import dumps
 from json import loads
 from time import time
+import ast
 
 from .NotifyBase import NotifyBase
 from ..common import NotifyImageSize
@@ -99,6 +100,13 @@ CHANNEL_LIST_DELIM = re.compile(r'[ \t\r\n,#\\/]+')
 # Channel Regular Expression Parsing
 CHANNEL_RE = re.compile(
     r'^(?P<channel>[+#@]?[A-Z0-9_-]{1,32})(:(?P<thread_ts>[0-9.]+))?$', re.I)
+
+# Pin message choice values
+PIN_CHOICE_VALS = {
+    "NONE": None,
+    "TRUE": True,
+    "FALSE": False
+}
 
 
 class SlackMode:
@@ -263,6 +271,25 @@ class NotifySlack(NotifyBase):
             'default': True,
             'map_to': 'include_footer',
         },
+        'add_reactions': {
+            'name': _('Add Reactions'),
+            'type': 'list:string',
+            'default': False,
+            'map_to': 'add_reactions',
+        },
+        'remove_existing_reactions': {
+            'name': _('Remove Existing Reactions'),
+            'type': 'bool',
+            'default': False,
+            'map_to': 'remove_existing_reactions',
+        },
+        'pin': {
+            'name': _('Pin Message'),
+            'type': 'choice:string',
+            "values": PIN_CHOICE_VALS,
+            'default': "NONE",
+            'map_to': 'pinned_message',
+        },
         # Use Payload in Blocks (vs legacy way):
         #  See: https://api.slack.com/reference/messaging/payload
         'blocks': {
@@ -282,7 +309,9 @@ class NotifySlack(NotifyBase):
 
     def __init__(self, access_token=None, token_a=None, token_b=None,
                  token_c=None, targets=None, include_image=True,
-                 include_footer=True, use_blocks=None, **kwargs):
+                 include_footer=True, add_reactions=[],
+                 remove_existing_reactions=False,
+                 pinned_message=None, use_blocks=None, **kwargs):
         """
         Initialize Slack Object
         """
@@ -382,6 +411,15 @@ class NotifySlack(NotifyBase):
 
         # Place a footer with each post
         self.include_footer = include_footer
+
+        # Do we add reaction emojis after message post
+        self.add_reactions = add_reactions
+
+        # Do we pin message after message post
+        self.pin_message = pinned_message
+
+        # Remove existing reactions
+        self.remove_existing_reactions = remove_existing_reactions
         return
 
     def send(self, body, title='', notify_type=NotifyType.INFO, attach=None,
@@ -555,6 +593,8 @@ class NotifySlack(NotifyBase):
                 # We'll perform a user lookup if we detect an email
                 email = is_email(channel)
                 if email:
+                    # Assign thread_ts to None, as this is a DM
+                    thread_ts = None
                     payload['channel'] = \
                         self.lookup_userid(email['full_email'])
 
@@ -577,7 +617,7 @@ class NotifySlack(NotifyBase):
                         has_error = True
                         continue
 
-                    # Store oure content
+                    # Store our content
                     channel, thread_ts = \
                         result.group('channel'), result.group('thread_ts')
                     if thread_ts:
@@ -618,6 +658,70 @@ class NotifySlack(NotifyBase):
                     ' to {}'.format(channel)
                     if channel is not None else ''))
 
+            # Here is where we will handle post message modification(s)
+            channel_id = response.get('channel', None)
+            if not channel_id:
+                self.logger.warn(
+                    'Could not get Channel From response, no extra actions\
+                        required.')
+                continue
+
+            if self.remove_existing_reactions and thread_ts:
+                # We will remove existing reactions
+                reaction_url = self.api_url.format('reactions.get')
+                params = {
+                    'channel': channel_id,
+                    'timestamp': thread_ts
+                }
+                response = self._get(reaction_url, params)
+                self.logger.debug('Received reaction  \
+                    response:\r\n{}'.format(response))
+                if not response:
+                    self.logger.warn(
+                        'Could not get reactions from message {}.'.format(
+                            reaction_url))
+                else:
+                    if response['message'].get("reactions"):
+                        for reaction in response['message']['reactions']:
+                            if not \
+                                self.remove_existing_reaction_from_slack(
+                                    channel_id,
+                                    thread_ts,
+                                    reaction
+                                    ['name']):
+                                self.logger.warn(
+                                    'Could not remove reaction {}'
+                                    .format(
+                                        reaction['name']))
+            if not thread_ts:
+                # If Thread TS is not given,
+                # lets use the id of the message we just posted
+                self.logger.debug('thread_ts not present, replacing with last \
+                                    messages ts {}'.format(response['ts']))
+                thread_ts = response['ts']
+            # Add reactions to message
+            if self.add_reactions:
+                self.logger.debug('Starting Reaction adding')
+                for reaction in self.add_reactions:
+                    self.logger.debug('Adding Reaction {}'.format(reaction))
+                    if not self.add_reaction_to_slack(channel_id,
+                                                      thread_ts,
+                                                      reaction):
+                        self.logger.warn(
+                            'Could not add reaction {}'
+                            .format(
+                                reaction))
+
+            # Pin the message
+            # We will attempt to Pin/unpin the message
+            # and ignore any "already pinned errors"
+            if self.pin_message is not None:
+                self.toggle_pin_message_on_slack(
+                    channel_id,
+                    thread_ts,
+                    self.pin_message
+                )
+
         if attach and self.attachment_support and \
                 self.mode is SlackMode.BOT and attach_channel_list:
             # Send our attachments (can only be done in bot mode)
@@ -649,7 +753,6 @@ class NotifySlack(NotifyBase):
                         response['file'].get('url_private')):
                     # We failed to post our attachments, take an early exit
                     return False
-
         return not has_error
 
     def lookup_userid(self, email):
@@ -807,6 +910,29 @@ class NotifySlack(NotifyBase):
             return None
 
         return user_id
+
+    def _get(self, url, params={}):
+        headers = {
+            'User-Agent': self.app_id,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': 'Bearer {}'.format(self.access_token),
+        }
+        try:
+            r = requests.get(
+                url,
+                headers=headers,
+                params=params,
+                verify=self.verify_certificate,
+                timeout=self.request_timeout,
+            )
+        except (AttributeError, TypeError, ValueError):
+            # ValueError = r.content is Unparsable
+            # TypeError = r.content is None
+            # AttributeError = r is None
+            pass
+        else:
+            response = loads(r.content)
+        return response
 
     def _send(self, url, payload, attach=None, **kwargs):
         """
@@ -1036,6 +1162,38 @@ class NotifySlack(NotifyBase):
         """
         return len(self.channels)
 
+    def remove_existing_reaction_from_slack(self, channel,
+                                            timestamp, reaction):
+        self.logger.debug('Sending remove reaction:\r\n{}'.format(reaction))
+        url = self.api_url.format('reactions.remove')
+        payload = {
+            'channel': channel,
+            'timestamp': timestamp,
+            'name': reaction
+        }
+        return self._send(url, payload=payload)
+
+    def add_reaction_to_slack(self, channel, timestamp, reaction):
+        self.logger.debug('Sending add reaction:\r\n{}'.format(reaction))
+        url = self.api_url.format('reactions.add')
+        payload = {
+            'channel': channel,
+            'timestamp': timestamp,
+            'name': reaction
+        }
+        return self._send(url, payload=payload)
+
+    def toggle_pin_message_on_slack(self, channel, timestamp, pinned=False):
+        self.logger.debug('Toggling Pin for message at timestamp\
+            :\r\n{}'.format(timestamp))
+        url = self.api_url.format('pins.add') if pinned \
+            else self.api_url.format('pins.remove')
+        payload = {
+            'channel': channel,
+            'timestamp': timestamp,
+        }
+        return self._send(url, payload=payload)
+
     @staticmethod
     def parse_url(url):
         """
@@ -1110,7 +1268,20 @@ class NotifySlack(NotifyBase):
         # Get Footer Flag
         results['include_footer'] = \
             parse_bool(results['qsd'].get('footer', True))
-
+        # Get Remove Reaction Flag
+        results['remove_existing_reactions'] = \
+            parse_bool(results['qsd'].get('remove_existing_reactions', False))
+        # Get Reactions to add
+        results['add_reactions'] = \
+            ast.literal_eval(results['qsd'].get('add_reactions', '[]'))
+        # Get Pin message Choice Value
+        if 'pin' in results['qsd'] and results['qsd'].get('pin'):
+            try:
+                results['pinned_message'] = PIN_CHOICE_VALS[
+                    results['qsd']['pin'].upper()]
+            except KeyError:
+                # An invalid key was given, default to None
+                results['pinned_message'] = PIN_CHOICE_VALS["NONE"]
         return results
 
     @staticmethod
