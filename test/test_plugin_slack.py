@@ -297,6 +297,39 @@ apprise_url_tests = (
          # we'll fail because our reacts is not a list is bad
          'response': False,
      }),
+    # test a case where we have a channel defined with thread_ts
+    # where we want to remove all slack emoji reactions from our message
+    ('slack://notify@T1JJ3T3L2/A1BRTD4JD/'
+     'TIiajkdnlazkcOXrIdevi7FQ/+124:100/@chan:123?'
+     'remove_existing_reactions=True',
+     {
+         'instance': NotifySlack,
+         'requests_response_text': 'ok',
+     }),
+    # And one failed case with bad formatting for good measure
+    ('slack://notify@T1JJ3T3L2/A1BRTD4JD/TIiajkdnlazkcOXrIdevi7FQ/'
+     '#b:123?remove_existing_reactions=bad', {
+         'instance': NotifySlack,
+         'requests_response_text': 'ok',
+         # we'll fail because our reacts is not a list is bad
+         'response': False,
+     }),
+    # test a case where we have a channel defined
+    # where we want to pin the message
+    ('slack://notify@T1JJ3T3L2/A1BRTD4JD/'
+     'TIiajkdnlazkcOXrIdevi7FQ/+124:100/@chan?pin=True',
+     {
+         'instance': NotifySlack,
+         'requests_response_text': 'ok',
+     }),
+    # And one failed case with bad formatting for good measure
+    ('slack://notify@T1JJ3T3L2/A1BRTD4JD/TIiajkdnlazkcOXrIdevi7FQ/'
+     '#b:123?pin=bad', {
+         'instance': NotifySlack,
+         'requests_response_text': 'ok',
+         # we'll fail because our reacts is not a list is bad
+         'response': False,
+     }),
 )
 
 
@@ -1101,3 +1134,187 @@ def test_plugin_slack_add_multiple_reactions_to_multiple_posts(mock_post):
         'https://slack.com/api/reactions.add'
     assert loads(mock_post.call_args_list[5][1]['data'])\
         .get("name", None) == "thumbsup"
+
+
+@mock.patch('requests.post')
+@mock.patch('requests.get')
+def test_plugin_slack_remove_reactions_from_message(mock_get, mock_post):
+    """
+    NotifySlack() Send Notifications and remove reactions
+    """
+    # Generate a (valid) bot token
+    token = 'xoxb-1234-1234-abc124'
+    thread_id_1 = 100
+    # Use a channel list as we may not be able
+    # to control order of notifications
+    channel_list = ["#general"]
+    request = mock.Mock()
+    request.content = dumps({
+        'ok': True
+    })
+    request.status_code = requests.codes.ok
+    mock_post.return_value = request
+    # Get Request Response
+    request.content = dumps({
+        "ok": True,
+        "type": "message",
+        "message": {
+            "type": "message",
+            "text": "Hi there!",
+            "ts": "1648602352.215969",
+            "team": "T123456",
+            "reactions": [
+                {
+                    "name": "grinning",
+                    "users": [
+                        "W222222"
+                    ],
+                    "count": 1
+                },
+                {
+                    "name": "question",
+                    "users": [
+                        "W333333"
+                    ],
+                    "count": 1
+                }
+            ],
+        },
+        "channel": "C123ABC456"
+    })
+    # Prepare Mock
+    mock_get.return_value = request
+
+    # Variation Initializations
+    obj = NotifySlack(access_token=token,
+                      targets=[
+                          f'{channel_list[0]}:{thread_id_1}'],
+                      remove_existing_reactions=True
+                      )
+    assert isinstance(obj, NotifySlack) is True
+    assert isinstance(obj.url(), str) is True
+
+    # No calls made yet
+    assert mock_post.call_count == 0
+
+    # Send our notification
+    assert obj.notify(
+        body='body', title='title', notify_type=NotifyType.INFO) is True
+    # Get was made
+    assert mock_get.call_count == 1
+    assert mock_get.call_args_list[0][0][0] == \
+        'https://slack.com/api/reactions.get'
+    # Post was made
+    assert mock_post.call_count == 3
+    assert mock_post.call_args_list[0][0][0] == \
+        'https://slack.com/api/chat.postMessage'
+    assert loads(mock_post.call_args_list[0][1]['data']).get("channel") \
+        in channel_list
+    assert mock_post.call_args_list[1][0][0] == \
+        'https://slack.com/api/reactions.remove'
+    assert loads(
+        mock_post.call_args_list[1][1]['data'])\
+        .get("name", None) == "grinning"
+    assert mock_post.call_args_list[2][0][0] == \
+        'https://slack.com/api/reactions.remove'
+    assert loads(
+        mock_post.call_args_list[2][1]['data'])\
+        .get("name", None) == "question"
+
+
+@mock.patch('requests.post')
+@mock.patch('requests.get')
+def test_plugin_slack_remove_reactions_from_multiple_messages(mock_get,
+                                                              mock_post):
+    """
+    NotifySlack() Send Notifications and remove reactions
+    """
+    # Generate a (valid) bot token
+    token = 'xoxb-1234-1234-abc124'
+    thread_id_1, thread_id_2 = 100, 200
+    # Use a channel list as we may not be able
+    # to control order of notifications
+    channel_list = ["#general", "#other"]
+    request = mock.Mock()
+    request.content = dumps({
+        'ok': True
+    })
+    request.status_code = requests.codes.ok
+    mock_post.return_value = request
+    # Get Request Response
+    request.content = dumps({
+        "ok": True,
+        "type": "message",
+        "message": {
+            "type": "message",
+            "text": "Hi there!",
+            "ts": "1648602352.215969",
+            "team": "T123456",
+            "reactions": [
+                {
+                    "name": "grinning",
+                    "users": [
+                        "W222222"
+                    ],
+                    "count": 1
+                },
+                {
+                    "name": "question",
+                    "users": [
+                        "W333333"
+                    ],
+                    "count": 1
+                }
+            ],
+        },
+        "channel": "C123ABC456"
+    })
+    # Prepare Mock
+    mock_get.return_value = request
+
+    # Variation Initializations
+    obj = NotifySlack(access_token=token,
+                      targets=[
+                          f'{channel_list[0]}:{thread_id_1}',
+                          f'{channel_list[1]}:{thread_id_2}'],
+                      remove_existing_reactions=True
+                      )
+    assert isinstance(obj, NotifySlack) is True
+    assert isinstance(obj.url(), str) is True
+
+    # No calls made yet
+    assert mock_post.call_count == 0
+
+    # Send our notification
+    assert obj.notify(
+        body='body', title='title', notify_type=NotifyType.INFO) is True
+    # Get was made
+    assert mock_get.call_count == 2
+    assert mock_get.call_args_list[0][0][0] == \
+        'https://slack.com/api/reactions.get'
+    assert mock_get.call_args_list[1][0][0] == \
+        'https://slack.com/api/reactions.get'
+
+    # Post was made
+    assert mock_post.call_count == 6
+    assert mock_post.call_args_list[0][0][0] == \
+        'https://slack.com/api/chat.postMessage'
+    assert loads(mock_post.call_args_list[0][1]['data']).get("channel") \
+        in channel_list
+    assert mock_post.call_args_list[1][0][0] == \
+        'https://slack.com/api/reactions.remove'
+    assert loads(
+        mock_post.call_args_list[1][1]['data'])\
+        .get("name", None) == "grinning"
+    assert mock_post.call_args_list[2][0][0] == \
+        'https://slack.com/api/reactions.remove'
+    assert loads(
+        mock_post.call_args_list[2][1]['data'])\
+        .get("name", None) == "question"
+    assert mock_post.call_args_list[3][0][0] == \
+        'https://slack.com/api/chat.postMessage'
+    assert loads(mock_post.call_args_list[3][1]['data']).get("channel") \
+        in channel_list and \
+        loads(mock_post.call_args_list[3][1]['data']).get("channel") != \
+        loads(mock_post.call_args_list[0][1]['data']).get("channel")
+            

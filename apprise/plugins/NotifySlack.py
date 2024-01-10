@@ -101,6 +101,13 @@ CHANNEL_LIST_DELIM = re.compile(r'[ \t\r\n,#\\/]+')
 CHANNEL_RE = re.compile(
     r'^(?P<channel>[+#@]?[A-Z0-9_-]{1,32})(:(?P<thread_ts>[0-9.]+))?$', re.I)
 
+# Pin message choice values
+PIN_CHOICE_VALS = {
+    "NONE": None,
+    "TRUE": True,
+    "FALSE": False
+}
+
 
 class SlackMode:
     """
@@ -278,8 +285,9 @@ class NotifySlack(NotifyBase):
         },
         'pin': {
             'name': _('Pin Message'),
-            'type': 'bool',
-            'default': False,
+            'type': 'choice:string',
+            "values": PIN_CHOICE_VALS,
+            'default': "NONE",
             'map_to': 'pinned_message',
         },
         # Use Payload in Blocks (vs legacy way):
@@ -657,21 +665,21 @@ class NotifySlack(NotifyBase):
                     'Could not get Channel From response, no extra actions\
                         required.')
                 continue
+            
             if self.remove_existing_reactions and thread_ts:
                 # We will remove existing reactions
-                url = self.api_url.format('reactions.get')
+                reaction_url = self.api_url.format('reactions.get')
                 params = {
                     'channel': channel_id,
                     'timestamp': thread_ts
                 }
-                response = self._get(url, params)
+                response = self._get(reaction_url, params)
                 self.logger.debug('Received reaction  \
                     response:\r\n{}'.format(response))
                 if not response:
-                    has_error = True
-                    self.logger.error(
+                    self.logger.warn(
                         'Could not get reactions from message {}.'.format(
-                            url))
+                            reaction_url))
                 else:
                     if response['message'].get("reactions"):
                         for reaction in response['message']['reactions']:
@@ -681,8 +689,7 @@ class NotifySlack(NotifyBase):
                                     thread_ts,
                                     reaction
                                     ['name']):
-                                has_error = True
-                                self.logger.error(
+                                self.logger.warn(
                                     'Could not remove reaction {}'
                                     .format(
                                         reaction['name']))
@@ -700,8 +707,7 @@ class NotifySlack(NotifyBase):
                     if not self.add_reaction_to_slack(channel_id,
                                                       thread_ts,
                                                       reaction):
-                        has_error = True
-                        self.logger.error(
+                        self.logger.warn(
                             'Could not add reaction {}'
                             .format(
                                 reaction))
@@ -1158,7 +1164,7 @@ class NotifySlack(NotifyBase):
 
     def remove_existing_reaction_from_slack(self, channel,
                                             timestamp, reaction):
-        self.logger.info('Sending remove reaction:\r\n{}'.format(reaction))
+        self.logger.debug('Sending remove reaction:\r\n{}'.format(reaction))
         url = self.api_url.format('reactions.remove')
         payload = {
             'channel': channel,
@@ -1168,7 +1174,7 @@ class NotifySlack(NotifyBase):
         return self._send(url, payload=payload)
 
     def add_reaction_to_slack(self, channel, timestamp, reaction):
-        self.logger.info('Sending remove reaction:\r\n{}'.format(reaction))
+        self.logger.debug('Sending add reaction:\r\n{}'.format(reaction))
         url = self.api_url.format('reactions.add')
         payload = {
             'channel': channel,
@@ -1178,7 +1184,7 @@ class NotifySlack(NotifyBase):
         return self._send(url, payload=payload)
 
     def toggle_pin_message_on_slack(self, channel, timestamp, pinned=False):
-        self.logger.info('Toggling Pin for message at timestamp\
+        self.logger.debug('Toggling Pin for message at timestamp\
             :\r\n{}'.format(timestamp))
         url = self.api_url.format('pins.add') if pinned \
             else self.api_url.format('pins.remove')
@@ -1268,9 +1274,14 @@ class NotifySlack(NotifyBase):
         # Get Reactions to add
         results['add_reactions'] = \
             ast.literal_eval(results['qsd'].get('add_reactions', '[]'))
-        # Get Pin message Flag
-        results['pinned_message'] = \
-            parse_bool(results['qsd'].get('pin', None))
+        # Get Pin message Choice Value
+        if 'pin' in results['qsd'] and results['qsd'].get('pin'):
+            try:
+                results['pinned_message'] = PIN_CHOICE_VALS[results['qsd']['pin']
+                                                            .upper()]
+            except KeyError:
+                # An invalid key was given, default to None
+                results['pinned_message'] = PIN_CHOICE_VALS["NONE"]
         return results
 
     @staticmethod
