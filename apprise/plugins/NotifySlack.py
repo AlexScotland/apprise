@@ -665,7 +665,7 @@ class NotifySlack(NotifyBase):
                     'Could not get Channel From response, no extra actions\
                         required.')
                 continue
-            
+
             if self.remove_existing_reactions and thread_ts:
                 # We will remove existing reactions
                 reaction_url = self.api_url.format('reactions.get')
@@ -919,17 +919,17 @@ class NotifySlack(NotifyBase):
         }
         try:
             r = requests.get(
-                    url,
-                    headers=headers,
-                    params=params,
-                    verify=self.verify_certificate,
-                    timeout=self.request_timeout,
-                )
+                url,
+                headers=headers,
+                params=params,
+                verify=self.verify_certificate,
+                timeout=self.request_timeout,
+            )
         except (AttributeError, TypeError, ValueError):
-                # ValueError = r.content is Unparsable
-                # TypeError = r.content is None
-                # AttributeError = r is None
-                pass
+            # ValueError = r.content is Unparsable
+            # TypeError = r.content is None
+            # AttributeError = r is None
+            pass
         else:
             response = loads(r.content)
         return response
@@ -1277,8 +1277,8 @@ class NotifySlack(NotifyBase):
         # Get Pin message Choice Value
         if 'pin' in results['qsd'] and results['qsd'].get('pin'):
             try:
-                results['pinned_message'] = PIN_CHOICE_VALS[results['qsd']['pin']
-                                                            .upper()]
+                results['pinned_message'] = PIN_CHOICE_VALS[
+                    results['qsd']['pin'].upper()]
             except KeyError:
                 # An invalid key was given, default to None
                 results['pinned_message'] = PIN_CHOICE_VALS["NONE"]

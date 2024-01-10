@@ -1317,4 +1317,116 @@ def test_plugin_slack_remove_reactions_from_multiple_messages(mock_get,
         in channel_list and \
         loads(mock_post.call_args_list[3][1]['data']).get("channel") != \
         loads(mock_post.call_args_list[0][1]['data']).get("channel")
-            
+
+
+@mock.patch('requests.post')
+def test_plugin_slack_pin_single_message(mock_post):
+    """
+    NotifySlack() Send Notification and pin the message
+    """
+    # Generate a (valid) bot token
+    token = 'xoxb-1234-1234-abc124'
+    thread_id_1 = 100
+    # Use a channel list as we may not be able
+    # to control order of notifications
+    channel_list = ["#general"]
+    request = mock.Mock()
+    request.content = dumps({
+        "ok": True,
+        "type": "message",
+        "message": {
+            "type": "message",
+            "text": "Hi there!",
+            "ts": "1648602352.215969",
+        },
+        "channel": "test"
+    })
+    request.status_code = requests.codes.ok
+    mock_post.return_value = request
+
+    # Variation Initializations
+    obj = NotifySlack(access_token=token,
+                      targets=[
+                          f'{channel_list[0]}:{thread_id_1}'],
+                      pinned_message=True
+                      )
+    assert isinstance(obj, NotifySlack) is True
+    assert isinstance(obj.url(), str) is True
+
+    # No calls made yet
+    assert mock_post.call_count == 0
+
+    # Send our notification
+    assert obj.notify(
+        body='body', title='title', notify_type=NotifyType.INFO) is True
+    # Post was made
+    assert mock_post.call_count == 2
+    assert mock_post.call_args_list[0][0][0] == \
+        'https://slack.com/api/chat.postMessage'
+    assert loads(mock_post.call_args_list[0][1]['data']).get("channel") \
+        in channel_list
+    assert mock_post.call_args_list[1][0][0] == \
+        'https://slack.com/api/pins.add'
+    assert loads(
+        mock_post.call_args_list[1][1]['data'])\
+        .get("channel", None) == "test"
+
+
+@mock.patch('requests.post')
+def test_plugin_slack_pin_multiple_messages(mock_post):
+    """
+    NotifySlack() Send Notifications and pin the messages
+    """
+    # Generate a (valid) bot token
+    token = 'xoxb-1234-1234-abc124'
+    thread_id_1, thread_id_2 = 100, 200
+    # Use a channel list as we may not be able
+    # to control order of notifications
+    channel_list = ["#general", "#other"]
+    request = mock.Mock()
+    request.content = dumps({
+        "ok": True,
+        "type": "message",
+        "message": {
+            "type": "message",
+            "text": "Hi there!",
+            "ts": "1648602352.215969",
+        },
+        "channel": "test"
+    })
+    request.status_code = requests.codes.ok
+    mock_post.return_value = request
+
+    # Variation Initializations
+    obj = NotifySlack(access_token=token,
+                      targets=[
+                          f'{channel_list[0]}:{thread_id_1}',
+                          f'{channel_list[1]}:{thread_id_2}'],
+                      pinned_message=True
+                      )
+    assert isinstance(obj, NotifySlack) is True
+    assert isinstance(obj.url(), str) is True
+
+    # No calls made yet
+    assert mock_post.call_count == 0
+
+    # Send our notification
+    assert obj.notify(
+        body='body', title='title', notify_type=NotifyType.INFO) is True
+    # Post was made
+    assert mock_post.call_count == 4
+    assert mock_post.call_args_list[0][0][0] == \
+        'https://slack.com/api/chat.postMessage'
+    assert loads(mock_post.call_args_list[0][1]['data']).get("channel") \
+        in channel_list
+    assert mock_post.call_args_list[1][0][0] == \
+        'https://slack.com/api/pins.add'
+    assert loads(
+        mock_post.call_args_list[1][1]['data'])\
+        .get("channel", None) == "test"
+    assert mock_post.call_args_list[2][0][0] == \
+        'https://slack.com/api/chat.postMessage'
+    assert loads(mock_post.call_args_list[2][1]['data']).get("channel") \
+        in channel_list and loads(mock_post.call_args_list[2][1]['data'])\
+        .get("channel") != loads(mock_post.call_args_list[0][1]['data'])\
+        .get("channel")
